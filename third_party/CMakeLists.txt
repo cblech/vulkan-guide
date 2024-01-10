@@ -10,6 +10,7 @@ add_library(tinyobjloader STATIC)
 
 target_sources(vkbootstrap PRIVATE 
     vkbootstrap/VkBootstrap.h
+    vkbootstrap/VkBootstrapDispatch.h
     vkbootstrap/VkBootstrap.cpp
     )
 
