@@ -6,6 +6,8 @@
 #include <vector>
 #include <vk_types.h>
 
+#include "vk_mem_alloc.h"
+
 struct FrameData
 {
 	VkCommandPool commandPool;
@@ -49,6 +51,11 @@ public:
 
 	DeletionQueue mainDeletionQueue;
 
+	VmaAllocator allocator;
+
+	AllocatedImage drawImage;
+	VkExtent2D drawImageExtent;
+
 	//initializes everything in the engine
 	void init();
 
@@ -67,7 +74,8 @@ private:
 	void init_commands();
 	void init_sync_structures();
 
-
 	void create_swapchain(uint32_t width, uint32_t height);
 	void destroy_swapchain();
+
+	void draw_background(VkCommandBuffer cmd) const;
 };

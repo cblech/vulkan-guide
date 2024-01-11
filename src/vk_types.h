@@ -7,6 +7,8 @@
 #include <functional>
 #include <vulkan/vulkan.h>
 
+#include "vk_mem_alloc.h"
+
 //we will add our main reusable types here
 
 #define VK_CHECK(x) \
@@ -25,4 +27,13 @@ struct DeletionQueue
 	std::deque<std::function<void()>> deletors;
 	void push_function(std::function<void()>&& function);
 	void flush();
+};
+
+struct AllocatedImage
+{
+	VkImage image;
+	VkImageView imageView;
+	VmaAllocation allocation;
+	VkExtent3D imageExtent;
+	VkFormat imageFormat;
 };

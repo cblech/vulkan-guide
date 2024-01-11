@@ -10,6 +10,9 @@
 
 #include <VkBootstrap.h>
 
+#define VMA_IMPLEMENTATION
+#include <vk_mem_alloc.h>
+
 constexpr bool bUseValidationLayers = true;
 
 FrameData& VulkanEngine::get_current_frame()
@@ -92,7 +95,7 @@ void VulkanEngine::draw()
 		nullptr,
 		&swapchainImageIndex));
 
-	const auto currentImage = swapchainImages[swapchainImageIndex];
+	const auto currentSwapchainImage = swapchainImages[swapchainImageIndex];
 
 	const auto cmd = currentFrame.mainCommandBuffer;
 
@@ -102,16 +105,33 @@ void VulkanEngine::draw()
 
 	VK_CHECK(vkBeginCommandBuffer(cmd, &cmdBeginInfo));
 
-	vkutil::transition_image(cmd, currentImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+	vkutil::transition_image(cmd, drawImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
 
-	const float flash = abs(sin(frameNumber / 120.f));
-	const VkClearColorValue clearValue = { { 0.0f , 0.0f , flash , 1.0f } };
+	draw_background(cmd);
 
-	const auto clearRange = vkinit::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+	vkutil::transition_image(
+		cmd,
+		drawImage.image,
+		VK_IMAGE_LAYOUT_GENERAL,
+		VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+	vkutil::transition_image(
+		cmd,
+		currentSwapchainImage,
+		VK_IMAGE_LAYOUT_UNDEFINED,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-	vkCmdClearColorImage(cmd, currentImage, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
+	vkutil::copy_image_to_image(
+		cmd,
+		drawImage.image,
+		currentSwapchainImage,
+		VkExtent2D{ drawImage.imageExtent.width , drawImage.imageExtent.height },
+		swapchainExtent);
 
-	vkutil::transition_image(cmd, currentImage, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+	vkutil::transition_image(
+		cmd,
+		currentSwapchainImage,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
 	VK_CHECK(vkEndCommandBuffer(cmd));
 
@@ -223,11 +243,63 @@ void VulkanEngine::init_vulkan()
 	// get graphics queue
 	graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
 	graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+
+	VmaAllocatorCreateInfo allocatorInfo = {};
+	allocatorInfo.physicalDevice = chosenGpu;
+	allocatorInfo.device = device;
+	allocatorInfo.instance = instance;
+	allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+	vmaCreateAllocator(&allocatorInfo, &allocator);
+
+	mainDeletionQueue.push_function([&]()
+	{
+		vmaDestroyAllocator(allocator);
+	});
 }
 
 void VulkanEngine::init_swapchain()
 {
 	create_swapchain(windowExtent.width, windowExtent.height);
+
+	VkExtent3D drawImageExtent = {
+		windowExtent.width ,
+		windowExtent.height ,
+		1
+	};
+
+	drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+	drawImage.imageExtent = drawImageExtent;
+
+	constexpr auto drawImageUsages =
+		VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+		VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+		VK_IMAGE_USAGE_STORAGE_BIT |
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+	auto renderImageInfo = vkinit::image_create_info(drawImage.imageFormat, drawImageUsages, drawImageExtent);
+
+	VmaAllocationCreateInfo renderImageAllocInfo = {};
+	renderImageAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+	renderImageAllocInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+	vmaCreateImage(
+		allocator,
+		&renderImageInfo,
+		&renderImageAllocInfo,
+		&drawImage.image,
+		&drawImage.allocation,
+		nullptr);
+
+	const auto renderViewInfo = vkinit::imageview_create_info(drawImage.imageFormat, drawImage.image,
+	                                                          VK_IMAGE_ASPECT_COLOR_BIT);
+
+	VK_CHECK(vkCreateImageView(device, &renderViewInfo, nullptr, &drawImage.imageView));
+
+	mainDeletionQueue.push_function([=]()
+	{
+		vkDestroyImageView(device, drawImage.imageView, nullptr);
+		vmaDestroyImage(allocator, drawImage.image, drawImage.allocation);
+	});
 }
 
 void VulkanEngine::init_commands()
@@ -236,14 +308,14 @@ void VulkanEngine::init_commands()
 		vkinit::command_pool_create_info(
 			graphicsQueueFamily,
 			VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
-	
+
 	for (auto& frame : frames)
 	{
 		VK_CHECK(vkCreateCommandPool(device, &commandPoolInfo, nullptr, &frame.commandPool));
 
 		VkCommandBufferAllocateInfo commandBufferInfo =
 			vkinit::command_buffer_allocate_info(frame.commandPool);
-		
+
 		VK_CHECK(vkAllocateCommandBuffers(device, &commandBufferInfo, &frame.mainCommandBuffer));
 	}
 }
@@ -257,9 +329,19 @@ void VulkanEngine::init_sync_structures()
 	{
 		VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frame.swapchainSemaphore));
 		VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frame.renderSemaphore));
-		
+
 		VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &frame.renderFence));
 	}
+}
+
+void VulkanEngine::draw_background(const VkCommandBuffer cmd) const
+{
+	const float flash = abs(sin(static_cast<float>(frameNumber) / 120.f));
+	const VkClearColorValue clearValue = { { 0.0f , 0.0f , flash , 1.0f } };
+
+	const auto clearRange = vkinit::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+
+	vkCmdClearColorImage(cmd, drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &clearValue, 1, &clearRange);
 }
 
 void VulkanEngine::create_swapchain(uint32_t width, uint32_t height)
