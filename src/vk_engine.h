@@ -6,6 +6,7 @@
 #include <vector>
 #include <vk_types.h>
 
+#include "vk_descriptors.h"
 #include "vk_mem_alloc.h"
 
 struct FrameData
@@ -54,7 +55,20 @@ public:
 	VmaAllocator allocator;
 
 	AllocatedImage drawImage;
-	VkExtent2D drawImageExtent;
+	//VkExtent2D drawImageExtent;
+
+	DescriptorAllocator globalDescriptorAllocator;
+
+	VkDescriptorSet drawImageDescriptors;
+	VkDescriptorSetLayout drawImageDescriptorLayout;
+
+	VkPipeline gradientPipeline;
+	VkPipelineLayout gradientPipelineLayout;
+
+	//imgui
+	VkFence immFence;
+	VkCommandBuffer immCommandBuffer;
+	VkCommandPool immCommandPool;
 
 	//initializes everything in the engine
 	void init();
@@ -68,11 +82,17 @@ public:
 	//run main loop
 	void run();
 
+	void immediate_submit(std::function<void(VkCommandBuffer cmd)>&& function) const;
+
 private:
 	void init_vulkan();
 	void init_swapchain();
 	void init_commands();
 	void init_sync_structures();
+	void init_descriptors();
+	void init_pipelines();
+	void init_background_pipelines();
+	void init_imgui();
 
 	void create_swapchain(uint32_t width, uint32_t height);
 	void destroy_swapchain();

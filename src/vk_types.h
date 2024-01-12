@@ -6,19 +6,32 @@
 #include <deque>
 #include <functional>
 #include <vulkan/vulkan.h>
+#include <iostream>
 
 #include "vk_mem_alloc.h"
 
 //we will add our main reusable types here
 
-#define VK_CHECK(x) \
-	do { \
-		VkResult err = x; \
-		if (err) { \
-			std::cout << "Detected Vulkan error: " << err << std::endl; \
-			abort(); \
-		} \
-	} while (0)
+inline void VK_CHECK(VkResult result)
+{
+	if (result)
+	{
+		std::cout << "Detected Vulkan error: " << result << std::endl;
+		abort();
+	}
+}
+
+template <typename T>
+inline T ceil_divide(T dividend, T divisor)
+{
+	auto quotient =
+		static_cast<float>(dividend) /
+		static_cast<float>(divisor);
+
+	quotient = std::ceil(quotient);
+
+	return static_cast<T>(quotient);
+}
 
 #define GATE(signal, base) ((base)?(signal):0)
 
